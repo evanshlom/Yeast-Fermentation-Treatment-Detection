@@ -1,5 +1,7 @@
-# Sensor Monitoring for Chemical Reaction with Yeast
-Sense gases outputted from yeast reaction with sugar water, combining a chemistry lab experiment with prototype electronics.
+# Yeast Fermentation Treatment Detection
+Stream gas sensor readings from live yeast fermentation offgases while detecting air environment with machine learning classification model based on composition of air environment including carbon dioxide and ethanol alcohol gas. 
+
+The prior project was: Sensor-Monitoring-for-Chemical-Reaction-with-Yeast (Sense gases outputted from yeast reaction with sugar water, combining a chemistry lab experiment with prototype electronics.)
 
 ## Lab
 - (Assemble the electronics)
@@ -20,23 +22,29 @@ The respective target gas of the sensor causes the sensor's voltage resistance t
 - Jumpers MtF and FtF $3
 - Resistors 10kOhm and 22kOhm/20kOhm $3
 
-
 ## Code
 
 ```
 08_reaction_gas_sensing/
+├── ml/
+    ├── Dockerfile
+    ├── train_model.py
+    ├── train.ps1
+    └── train_data.csv
 ├── detect.c
 ├── detect.h
 ├── flash_and_monitor.ps1
 ├── link.ld
 ├── main.c
+├── main_test.c
+├── ml_model.c
+├── ml_model.h
 ├── Makefile
 ├── startup.c
 ├── stm32f446.h
 ├── system.c
 └── system.h
 ```
-
 
 ## Commands
 ```powershell
@@ -46,7 +54,6 @@ make
 ```
 
 If the flash and monitor script doesn't work and the terminal freezes after running the script then unplug your STM32 microcontroller and replug it back in.
-
 
 ## Full Steps
 
@@ -73,3 +80,28 @@ cd folder/projectfolder
 
 4. **Confirm it's running**
    It should be outputting sensor readings in the terminal window.
+
+## Training the ML Model
+
+Label your collected data with a `Type` column (`openair`, `regular`,
+`activatedcharcoal`, etc.) and save it as `ml/train_data.csv`. Then,
+with Docker Engine running:
+
+```powershell
+.\ml\train.ps1
+```
+
+This builds the training image, runs RandomForest training, and
+overwrites `ml_model.c` / `ml_model.h` with the compiled model — no
+runtime needed on the STM32, it's plain C.
+
+## Running the Live Test
+
+```powershell
+make clean
+make test
+.\flash_and_monitor.ps1 -BinName gas_monitor_test.bin
+```
+
+Flashes the ML-enabled firmware. The terminal table now includes a
+**Class** column showing the live predicted condition per reading.
