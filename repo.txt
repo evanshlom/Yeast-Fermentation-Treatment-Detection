@@ -1,0 +1,12 @@
+your-repo/
+├── main.c              (unchanged — training-data firmware)
+├── main_test.c          (new — ML test firmware)
+├── detect.c / detect.h  (unchanged)
+├── system.c / system.h  (unchanged)
+├── stm32f446.h / startup.c / link.ld  (unchanged)
+├── ml_model.c / ml_model.h  (placeholder — real ones come from training)
+├── Makefile             (updated — `make` and `make test` targets)
+├── flash_and_monitor.ps1  (updated — -BinName parameter)
+├── Dockerfile            (new)
+├── ml/train_model.py     (new)
+└── PROJECT_SUMMARY.txt   (new — for handoff to a fresh chat)

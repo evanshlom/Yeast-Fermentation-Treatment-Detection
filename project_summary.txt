@@ -1,0 +1,230 @@
+PROJECT SUMMARY — Yeast Fermentation Gas Monitoring + ML Classification
+STM32F446RE Nucleo, bare-metal C, dual gas sensor, RandomForest classifier
+
+================================================================
+1. GOAL
+================================================================
+Monitor a yeast + sugar water fermentation reaction's off-gas using
+two analog gas sensors read by an STM32 Nucleo board, log the data,
+then train a model to classify which of three experimental
+conditions is currently being read:
+  - regular            (plain yeast + sugar water)
+  - bakingsoda          (baking soda added, expected to reduce CO2-family gas)
+  - activatedcharcoal   (activated charcoal added, expected to reduce alcohol gas)
+
+The trained model runs LIVE on the STM32 itself (compiled directly
+to C — no runtime, no ONNX, no Python on-device) so the board can
+classify readings in real time as sensors are moved between
+containers.
+
+================================================================
+2. HARDWARE
+================================================================
+Board: STM32 Nucleo-F446RE (board code MB1136 rev C)
+
+Sensors: two "Flying-Fish" brand MQ-style gas sensor breakout modules
+  - A0 (PA0) = MQ-135-style sensor, labeled "CO2" in code/output
+               (NOTE: not CO2-specific — responds to a broad mix of
+               VOCs/ammonia/alcohol-family gases, treat as general
+               off-gas indicator, not a true CO2 ppm reading)
+  - A1 (PA1) = MQ-3-style alcohol sensor, labeled "ALC" in code/output
+               (more selective toward ethanol vapor specifically)
+
+Wiring per sensor (breadboard):
+  - Sensor VCC -> breadboard + rail -> Nucleo 5V
+  - Sensor GND -> breadboard - rail -> Nucleo GND
+  - Sensor AOUT -> 10k ohm resistor -> "node" row
+  - node row -> 22k ohm resistor -> GND rail
+  - node row -> jumper -> Nucleo A0 (sensor 1) or A1 (sensor 2)
+  This is a voltage divider protecting the STM32's 3.3V-max ADC pins
+  from the sensors' ~5V AOUT swing. Divider ratio ~0.6875
+  (22k / (10k+22k)), giving ~3.44V max at the ADC pin — safely under
+  the STM32's absolute max input spec.
+
+Both sensors' 4th pin (DOUT, digital threshold output) is unused —
+only VCC, GND, AOUT are wired per sensor (3 wires each, 6 total).
+
+================================================================
+3. SENSOR ELECTRONICS/CHEMISTRY (mechanism)
+================================================================
+Each sensor's tin-dioxide (SnO2) element is heated to ~300C. In clean
+air, adsorbed oxygen pulls electrons out of the material, creating a
+resistive barrier at grain boundaries (high resistance). Target gas
+molecules react with that adsorbed oxygen, releasing electrons back
+into the material, lowering resistance. Inside the sensor module,
+this variable resistance (Rs) is wired in series with a fixed load
+resistor (RL) as a voltage divider — as Rs drops, more of the supply
+voltage shifts onto AOUT. So: more target gas present -> lower Rs ->
+higher AOUT voltage. Same mechanism for both sensors; only the
+surface coating's molecular selectivity differs between them.
+
+================================================================
+4. FILE STRUCTURE (project root)
+================================================================
+Firmware (bare-metal C, no HAL, Barr Group coding standard):
+  - main.c            : TRAINING-DATA COLLECTION firmware. Prints a
+                        live human-readable table of both sensors'
+                        raw ADC code, ADC-pin voltage, and
+                        reconstructed sensor AOUT voltage. Re-prints
+                        column headers every 40 rows (and before
+                        row 0). NEVER touched/overwritten by the
+                        test/ML build — separate file, separate binary.
+  - main_test.c       : MODEL-TESTING firmware. Identical sensor
+                        reading to main.c, PLUS calls
+                        ml_predict_class() each sample and prints the
+                        predicted class name in an added "Class"
+                        column. Builds to a separate binary
+                        (gas_monitor_test.bin) via `make test`, so
+                        switching between collecting more training
+                        data and testing the model never requires
+                        reflashing/editing the other firmware.
+  - detect.c/.h       : Sensor-reading + divider math (shared by both
+                        main.c and main_test.c). Reads both ADC
+                        channels, converts to volts, reverses the
+                        divider math to reconstruct AOUT voltage.
+  - system.c/.h       : Hardware init — clocks, GPIO, ADC1 (channel-
+                        selectable, PA0/PA1), USART2 (115200 8N1,
+                        TX-only, printf retargeted to it), SysTick
+                        (1ms tick for delay_ms()), LED helpers.
+  - stm32f446.h       : Minimal register definitions (RCC, GPIOA,
+                        ADC1, USART2, SysTick). Unchanged from a
+                        prior project (07_dryer_stm32, piezo vibration
+                        SPC detector) that this one is modeled after.
+  - startup.c         : Vector table + Reset_Handler (copies .data,
+                        zeros .bss, enables FPU, calls main()).
+                        Unchanged from prior project.
+  - link.ld           : Linker script (512K flash / 128K SRAM map).
+                        Unchanged from prior project.
+  - Makefile          : Two independent build targets:
+                          `make`       -> gas_monitor.bin (training)
+                          `make test`  -> gas_monitor_test.bin (ML test)
+                          `make clean` -> removes both binaries' build
+                                          artifacts. Uses cmd /C del
+                                          on Windows (rm.exe isn't
+                                          guaranteed to be on PATH).
+
+ML model files (STM32 side):
+  - ml_model.c/.h     : PLACEHOLDER as of this writing — always
+                        predicts class 0 ("regular"). Gets fully
+                        OVERWRITTEN by running ml/train_model.py once
+                        real labeled data exists. Do not hand-edit
+                        either version.
+
+ML training (Python, Docker — training only, never runs on-device):
+  - Dockerfile        : python:3.11-slim + pandas + scikit-learn +
+                        m2cgen.
+  - ml/train_model.py : Loads one or more labeled CSVs, engineers a
+                        ratio feature (ALC_AOUTv / CO2_AOUTv, since
+                        the ratio should stay more stable across
+                        sessions than absolute voltages), trains a
+                        RandomForestClassifier (kept small on purpose
+                        — 25 trees, max_depth 5 — since more trees
+                        means a much larger generated C file), prints
+                        a holdout classification report + confusion
+                        matrix, then compiles the trained model
+                        directly into plain C via m2cgen
+                        (m2cgen.export_to_c) and writes ml_model.c/.h
+                        ready to drop into the STM32 project.
+                        Class label order is FIXED in the script as
+                        ["regular", "bakingsoda", "activatedcharcoal"]
+                        — index 0/1/2 in the generated code always
+                        means exactly this order, regardless of your
+                        CSVs' row order or class balance.
+
+Tooling:
+  - flash_and_monitor.ps1 : PowerShell script that finds the Nucleo's
+                        mass-storage drive (label matches ^(NODE?_|DIS_)
+                        — this board's specific label was "NOD_F446RE"),
+                        copies a chosen .bin onto it (this IS the
+                        flash step), waits 3s for reset, finds the
+                        ST-Link Virtual COM Port via WMI/CIM, opens it
+                        at 115200 baud, and streams every line to the
+                        terminal while also writing each parsed data
+                        row to a timestamped CSV
+                        (gas_log_YYYYMMDD_HHMMSS.csv) in the project
+                        folder.
+                        Accepts -BinName parameter (default
+                        gas_monitor.bin) so you can run
+                        `.\flash_and_monitor.ps1 -BinName gas_monitor_test.bin`
+                        to flash/monitor the ML test firmware instead,
+                        without editing the script.
+  - README.md         : Human-readable build/flash walkthrough with
+                        the same steps as below.
+
+================================================================
+5. WORKFLOW — COLLECTING TRAINING DATA
+================================================================
+1. cd into project folder
+2. make            (builds gas_monitor.bin — training firmware)
+3. .\flash_and_monitor.ps1
+4. Run a fermentation experiment under ONE of the three conditions
+   (regular / bakingsoda / activatedcharcoal), physically moving the
+   sensors as desired. Let it log to its auto-generated CSV.
+5. Stop with Ctrl+C. Manually add a "Type" column to that session's
+   CSV with the correct label (regular / bakingsoda /
+   activatedcharcoal) for every row — the CSV as generated does NOT
+   include this column; it must be added by hand afterward, since
+   the firmware/script has no way to know which condition is running.
+6. Repeat for the other two conditions (and ideally multiple
+   independent replicate runs per condition — see caveats below).
+
+================================================================
+6. WORKFLOW — TRAINING THE MODEL
+================================================================
+1. Put all labeled CSVs somewhere under the project folder, e.g.
+   training_csvs/
+2. docker build -t gas-ml .
+3. docker run --rm -v "${PWD}:/data" -w /data gas-ml \
+     python ml/train_model.py training_csvs/*.csv
+4. Review the printed classification report / confusion matrix.
+5. ml_model.c and ml_model.h are written to the project folder,
+   overwriting the placeholders.
+
+================================================================
+7. WORKFLOW — RUNNING THE LIVE TEST
+================================================================
+1. make test              (builds gas_monitor_test.bin, using the
+                            real ml_model.c generated above)
+2. .\flash_and_monitor.ps1 -BinName gas_monitor_test.bin
+3. Move sensors between containers as desired — the terminal's
+   "Class" column shows the live predicted condition each sample.
+4. This session's CSV log still gets written (same as training mode)
+   in case you want to review numeric behavior later, though it has
+   no Type column since it's a live test, not labeled data.
+
+================================================================
+8. KNOWN CAVEATS / THINGS NOT YET RESOLVED
+================================================================
+- Absolute voltage baselines drift between sessions (ambient
+  conditions, sensor warm-up state, time since last exposure). This
+  is why the ratio feature was prioritized over raw voltages, but it
+  has NOT yet been validated across many independent sessions.
+- If each class's training data comes from only one continuous
+  session, rows within that session are autocorrelated (one slowly-
+  drifting time series, not independent samples). A model trained
+  and validated on splits from the same single runs may look
+  accurate in testing but fail to generalize to a genuinely new
+  container/session. Ideally, collect multiple independent replicate
+  runs per class (different days/batches) before trusting the model.
+- The "CO2" sensor (MQ-135) is not CO2-specific — see section 3.
+- Sensor recovery after removal from a high-gas environment is not
+  instant and may not be symmetric; MQ sensors also want 24-48h
+  "burn-in" for fully stable baselines, though they respond in real
+  time well before that.
+- The model was intentionally kept small (25 trees, depth 5) to keep
+  the generated C file small enough to comfortably fit STM32 flash.
+  If classification accuracy is poor, increasing these is possible
+  but will grow the generated ml_model.c file significantly.
+
+================================================================
+9. WHAT TO GIVE A FRESH CHAT
+================================================================
+This file, plus (if relevant to the new conversation):
+  - Current main.c / main_test.c / detect.c / detect.h / system.c /
+    system.h if firmware changes are needed
+  - The Makefile and flash_and_monitor.ps1 if build/flash tooling
+    changes are needed
+  - ml/train_model.py and a sample labeled CSV if ML/training changes
+    are needed
+  - Actual classification_report/confusion_matrix output once real
+    training data exists, if model performance needs discussion

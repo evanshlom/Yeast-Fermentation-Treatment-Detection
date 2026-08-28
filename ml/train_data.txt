@@ -1,0 +1,9 @@
+Steps:
+1. Start Docker Engine
+2. Name your CSV train_data.csv, put it in ml/
+3. run: .\ml\train.ps1
+
+No parameters needed for the normal case — -Csvs and -Tail are still there if you ever want to override.
+
+train_data.csv is from the train data tab in the previous project's Analysis excel workbook file.
+train_data includes the final 300 rows from the 3 included types (bkg soda excld)

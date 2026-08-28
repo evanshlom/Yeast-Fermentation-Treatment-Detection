@@ -1,30 +1,30 @@
 <#
 .SYNOPSIS
-    Flashes gas_monitor.bin to a connected STM32 Nucleo board and opens
+    Flashes a chosen .bin to a connected STM32 Nucleo board and opens
     a live serial monitor over the ST-Link Virtual COM Port.
 
-.DESCRIPTION
-    Automates what was previously two manual steps:
-      1. Finding the Nucleo's USB mass-storage drive and copying the
-         .bin onto it (this is what actually flashes the board).
-      2. Finding the ST-Link Virtual COM Port in Device Manager and
-         opening a serial terminal at 115200 baud.
+.PARAMETER BinName
+    Which binary to flash. Defaults to gas_monitor.bin (training-data
+    collection firmware). Pass -BinName gas_monitor_test.bin to flash
+    the ML-classification test firmware instead — no need to edit
+    this script or rename files to switch between the two.
 
-    No PuTTY/Tera Term needed — this opens the serial port directly
-    in PowerShell and streams incoming bytes to the console.
-
-.NOTES
-    Run from the project folder after `make` has produced gas_monitor.bin.
-    Press Ctrl+C to stop monitoring (board keeps running).
+.EXAMPLE
+    .\flash_and_monitor.ps1
+    .\flash_and_monitor.ps1 -BinName gas_monitor_test.bin
 #>
+
+param(
+    [string]$BinName = "gas_monitor.bin"
+)
 
 $ErrorActionPreference = "Stop"
 
-$binFile = Join-Path $PSScriptRoot "gas_monitor.bin"
+$binFile = Join-Path $PSScriptRoot $BinName
 $baudRate = 115200
 
 if (-not (Test-Path $binFile)) {
-    Write-Error "gas_monitor.bin not found in $PSScriptRoot. Run 'make' first."
+    Write-Error "$BinName not found in $PSScriptRoot. Run 'make' (or 'make test') first."
     exit 1
 }
 
@@ -44,7 +44,7 @@ $driveLetter = $nucleoDrive.DriveLetter
 Write-Host "Found Nucleo drive: $driveLetter`: ($($nucleoDrive.FileSystemLabel))" -ForegroundColor Green
 
 # ── Step 2: Flash by copying the .bin onto the drive ────────────────────
-Write-Host "Flashing gas_monitor.bin..." -ForegroundColor Cyan
+Write-Host "Flashing $BinName..." -ForegroundColor Cyan
 Copy-Item -Path $binFile -Destination "$driveLetter`:\" -Force
 
 # Give the board a moment to program and auto-reset
@@ -76,6 +76,7 @@ Write-Host "Found COM port: $comPort" -ForegroundColor Green
 Write-Host "`nOpening serial monitor on $comPort @ $baudRate baud. Press Ctrl+C to stop.`n" -ForegroundColor Cyan
 
 $port = New-Object System.IO.Ports.SerialPort $comPort, $baudRate, "None", 8, "One"
+$port.ReadTimeout = 3000
 
 # ── Step 5: Set up CSV logging ────────────────────────────────────────────
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
